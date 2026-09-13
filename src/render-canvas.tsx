@@ -65,7 +65,13 @@ export function CanvasRenderer({ layout, debug }: { layout: ResolvedLayout; debu
           ctx.font = `${el.role === "primary" ? 700 : 500} ${el.fontSize ?? 14}px system-ui, sans-serif`;
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
-          wrapText(ctx, el.content ?? "", el.x, el.y, el.width, el.height, el.fontSize ?? 14);
+          const lines = (el.content || "").split("\n");
+          let cy = el.y;
+          const lineHeight = (el.fontSize ?? 14) * 1.2;
+          for (const line of lines) {
+             ctx.fillText(line, el.x, cy);
+             cy += lineHeight;
+          }
         }
 
         if (debug && el.role === "action") {
@@ -94,7 +100,7 @@ export function CanvasRenderer({ layout, debug }: { layout: ResolvedLayout; debu
     draw();
   }, [layout]);
 
-  return <canvas ref={ref} style={{ borderRadius: 4, boxShadow: "0 0 0 1px rgba(0,0,0,0.08)" }} />;
+  return <canvas ref={ref} style={{ borderRadius: 4, boxShadow: "0 0 0 1px rgba(0,0,0,0.08)", transition: "width 400ms cubic-bezier(0.4, 0, 0.2, 1), height 400ms cubic-bezier(0.4, 0, 0.2, 1)" }} />;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -105,31 +111,4 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
-}
-
-function wrapText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  maxHeight: number,
-  fontSize: number
-) {
-  const words = text.split(" ");
-  let line = "";
-  let cy = y;
-  const lineHeight = fontSize * 1.2;
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      if (cy + lineHeight > y + maxHeight) return;
-      ctx.fillText(line, x, cy);
-      line = word;
-      cy += lineHeight;
-    } else {
-      line = test;
-    }
-  }
-  if (line && cy + lineHeight <= y + maxHeight + lineHeight) ctx.fillText(line, x, cy);
 }

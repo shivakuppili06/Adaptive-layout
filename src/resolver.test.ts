@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveLayout } from "./resolver";
-import { surfaces, type SurfaceProfile } from "./surfaces";
+import { surfaces, type SurfaceProfile, validateSurface } from "./surfaces";
 import { demoAd } from "./demo-spec";
 
 function rectsOverlap(a: { x: number; y: number; width: number; height: number }, b: typeof a): boolean {
@@ -119,14 +119,45 @@ describe("resolveLayout — structural correctness", () => {
     }
   });
 
-  it("throws a clear runtime error for a surface whose safe area consumes the whole canvas", () => {
-    expect(() =>
-      resolveLayout(demoAd, {
-        id: "broken",
-        width: 100,
-        height: 100,
-        safeArea: { top: 60, bottom: 60, left: 0, right: 0 },
-      })
-    ).not.toThrow(); // resolver itself is permissive; validateSurface (surfaces.ts) is the guard — see that test file's usage in App.tsx
+  it("throws a clear runtime error from validateSurface for invalid surfaces", () => {
+    const broken = {
+      id: "broken",
+      width: 100,
+      height: 100,
+      safeArea: { top: 60, bottom: 60, left: 0, right: 0 },
+    };
+    expect(() => validateSurface(broken)).toThrow(/consumes the entire surface/);
+    
+    expect(() => validateSurface({ ...broken, safeArea: { top: -1, right: 0, bottom: 0, left: 0 }})).toThrow(/non-negative/);
+    expect(() => validateSurface({ ...broken, width: 0, height: 100, safeArea: { top: 0, right: 0, bottom: 0, left: 0 }})).toThrow(/must be positive/);
+  });
+
+  it("distributes space horizontally among multiple heroes in hybrid mode", () => {
+    const multiHeroSpec = {
+      id: "multi-hero",
+      elements: [
+        { id: "h1", type: "image", role: "hero", priority: 1, src: "a" } as const,
+        { id: "h2", type: "image", role: "hero", priority: 1, src: "b" } as const,
+        { id: "cta", type: "button", role: "action", priority: 1, content: "Go" } as const,
+      ]
+    };
+    const layout = resolveLayout(multiHeroSpec, surfaces.retailKiosk);
+    const heroes = layout.elements.filter(e => e.role === "hero");
+    expect(heroes.length).toBe(2);
+    expect(heroes[0].y).toEqual(heroes[1].y);
+    expect(heroes[0].x).toBeLessThan(heroes[1].x);
+    expect(rectsOverlap(heroes[0], heroes[1])).toBe(false);
+  });
+
+  it("truncates text when using a TextMeasurementProvider", () => {
+    const provider = {
+      measureText: (_text: string, _fontSize: number, w: number, h: number, _weight: any, _maxLines?: number) => {
+        // mock truncated result
+        return { width: w, height: h, lines: 2, fittedText: "Truncated...", truncated: true };
+      }
+    };
+    const layout = resolveLayout(demoAd, surfaces.retailKioskCramped, provider);
+    const headline = layout.elements.find(e => e.role === "primary");
+    expect(headline?.content).toBe("Truncated...");
   });
 });

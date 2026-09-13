@@ -34,6 +34,8 @@ export interface AdElement {
   src?: string;
   /** Intrinsic aspect ratio (w/h) used by the resolver for hero/branding images. */
   aspectRatio?: number;
+  /** Maximum number of lines for text elements before forcing truncation. */
+  maxLines?: number;
 }
 
 export interface AdSpec {

@@ -11,6 +11,28 @@ import type { SurfaceProfile } from "./surfaces";
 
 export type CompositionMode = "stack" | "row" | "hybrid";
 
+export interface TextMeasurementProvider {
+  /**
+   * Measures text and optionally computes a truncated version with ellipsis if it overflows.
+   * Returns lines and the actual fitted text.
+   */
+  measureText(
+    text: string,
+    fontSize: number,
+    maxWidth: number,
+    maxHeight: number,
+    fontWeight: number | string,
+    maxLines?: number
+  ): { width: number; height: number; lines: number; fittedText: string; truncated: boolean };
+}
+
+export interface ConstraintIssue {
+  severity: "warning" | "error";
+  elementId?: string;
+  constraint: string;
+  message: string;
+}
+
 export interface ResolvedElement {
   id: string;
   type: AdElement["type"];
@@ -21,7 +43,7 @@ export interface ResolvedElement {
   height: number;
   fontSize?: number;
   visible: boolean;
-  /** Set when the element was altered from its ideal size to fit. Useful for debugging / the demo's trace panel. */
+  /** Set when the element was altered from its ideal size to fit. */
   degradation?: "shrunk" | "dropped" | null;
   content?: string;
   src?: string;
@@ -35,10 +57,11 @@ export interface ResolvedLayout {
   elements: ResolvedElement[];
   /** Human-readable trace of degradation decisions. */
   trace: string[];
+  /** Structured validation warnings/errors generated during resolution. */
+  issues: ConstraintIssue[];
 }
 
 // ---- Role-based sizing table -----------------------------------------
-// (weight = share of main axis at ideal allocation; min = floor before drop)
 const ROLE_WEIGHT: Record<ElementRole, number> = {
   hero: 0.4,
   primary: 0.22,
@@ -79,6 +102,7 @@ interface WorkingItem {
   locked: boolean;
   degradation: ResolvedElement["degradation"];
   fontSize?: number;
+  fittedText?: string;
 }
 
 function pickMode(contentW: number, contentH: number): CompositionMode {
@@ -89,27 +113,34 @@ function pickMode(contentW: number, contentH: number): CompositionMode {
 }
 
 function priorityRank(el: AdElement): number {
-  // Action elements are highest priority (0), ensuring they are compromised last.
-  if (el.role === "action") return 0;
   return el.priority;
 }
 
-export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLayout {
+export function resolveLayout(spec: AdSpec, surface: SurfaceProfile, textProvider?: TextMeasurementProvider): ResolvedLayout {
   const trace: string[] = [];
+  const issues: ConstraintIssue[] = [];
+
+  // Basic validation logging during resolve
+  if (surface.width <= 0 || surface.height <= 0) {
+    issues.push({ severity: "error", constraint: "dimensions", message: "Surface dimensions must be positive." });
+  }
+
   const contentX = surface.safeArea.left;
   const contentY = surface.safeArea.top;
   const contentW = surface.width - surface.safeArea.left - surface.safeArea.right;
   const contentH = surface.height - surface.safeArea.top - surface.safeArea.bottom;
 
+  if (contentW <= 0 || contentH <= 0) {
+    issues.push({ severity: "error", constraint: "safeArea", message: "Safe area consumes entire surface." });
+  }
+
   const mode = pickMode(contentW, contentH);
   trace.push(
-    `Composition mode = "${mode}" (content aspect ratio ${(contentW / contentH).toFixed(2)}: ` +
-      `${mode === "row" ? "wide/short -> single horizontal row" : mode === "stack" ? "tall -> vertical stack" : "square-ish -> image band + row"})`
+    `Composition mode = "${mode}" (content aspect ratio ${(contentW / contentH).toFixed(2)})`
   );
 
   const mainAxisLength = mode === "row" ? contentW : contentH;
 
-  // Sort by degrade priority: drop/shrink candidates first (highest rank number = lowest importance).
   const items: WorkingItem[] = spec.elements.map((el) => ({
     el,
     main: 0,
@@ -118,16 +149,13 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     locked: false,
     degradation: null,
     fontSize: ROLE_BASE_FONT[el.role] || undefined,
+    fittedText: el.content,
   }));
 
   function totalWeight(pool: WorkingItem[]): number {
     return pool.reduce((s, i) => s + ROLE_WEIGHT[i.el.role], 0);
   }
 
-  // Reallocate space among visible, unlocked items. Locked items keep the
-  // fixed `main` they were floored to; the remaining main-axis space (after
-  // subtracting locked items' space and gaps) is shared by weight among
-  // whatever is left.
   function allocate(): void {
     const active = items.filter((i) => i.visible);
     const gapTotal = GAP * Math.max(0, active.length - 1);
@@ -141,15 +169,6 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     }
   }
 
-  // `allocate()` distributes space proportionally by weight.
-  // `allocate()` always distributes the full main axis proportionally by
-  // weight, so it never "overflows" by construction — the real signal
-  // that something must give is an *unlocked* item's weighted share
-  // landing below its own floor, or locked items alone already consuming
-  // more than the whole axis (nothing left to give the rest).
-  // Elements with role "action" are never dropped (see priorityRank).
-  // Priority-1 elements are droppable only as an absolute last resort,
-  // once every priority-2/3 element has already been dropped.
   function lockedSpaceExceedsAxis(): boolean {
     const active = items.filter((i) => i.visible);
     const gapTotal = GAP * Math.max(0, active.length - 1);
@@ -163,17 +182,16 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     guard++;
 
     if (lockedSpaceExceedsAxis()) {
-      // Even everything already at floor doesn't fit — must drop something.
       const droppable = items
         .filter((i) => i.visible)
-        .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))
-        .find((i) => priorityRank(i.el) > 0);
-      if (!droppable) break; // only the CTA is left; let it overflow slightly rather than disappear
+        .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0];
+      
+      if (!droppable) break; 
+      
       droppable.visible = false;
       droppable.degradation = "dropped";
       trace.push(
-        `"${droppable.el.id}" (role=${droppable.el.role}, priority=${droppable.el.priority}) dropped — ` +
-          `remaining elements' floors alone exceed the available space.`
+        `"${droppable.el.id}" (priority=${droppable.el.priority}) dropped — remaining floors exceed available space.`
       );
       allocate();
       continue;
@@ -182,19 +200,10 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     const active = items.filter((i) => i.visible);
     const belowFloor = active
       .filter((i) => !i.locked && i.main < i.minMain - 0.01)
-      .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0]; // lowest importance first
+      .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0];
 
     if (belowFloor) {
-      if (priorityRank(belowFloor.el) === 0) {
-        // The CTA itself can't be shrunk below floor by definition — clamp and stop; minTapTarget enforcement below will reserve its space properly.
-        belowFloor.main = belowFloor.minMain;
-        belowFloor.locked = true;
-        allocate();
-        continue;
-      }
-      trace.push(
-        `"${belowFloor.el.id}" (role=${belowFloor.el.role}) shrunk to its floor (${belowFloor.minMain}px) — its weighted share fell short.`
-      );
+      trace.push(`"${belowFloor.el.id}" shrunk to its floor (${belowFloor.minMain}px).`);
       belowFloor.degradation = "shrunk";
       belowFloor.main = belowFloor.minMain;
       belowFloor.locked = true;
@@ -202,42 +211,77 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
       continue;
     }
 
-    break; // everything fits at or above its floor
+    // Text measurement / truncation pass
+    if (textProvider) {
+      let overflowResolved = false;
+      for (const i of items.filter(i => i.visible && (i.el.type === "text" || i.el.type === "button"))) {
+         const w = mode === "stack" ? CROSS_AXIS_FRACTION[i.el.role] * contentW : i.main;
+         const h = mode === "row" ? CROSS_AXIS_FRACTION[i.el.role] * contentH : i.main;
+         
+         const metrics = textProvider.measureText(
+           i.el.content || "", 
+           i.fontSize || 14, 
+           w, 
+           h,
+           i.el.role === "primary" ? 700 : 500,
+           i.el.maxLines
+         );
+
+         if (metrics.truncated && i.fittedText !== metrics.fittedText) {
+             trace.push(`"${i.el.id}" truncated to fit available bounds/lines.`);
+             i.fittedText = metrics.fittedText;
+             i.degradation = "shrunk";
+             // Force reallocation or at least mark it processed
+             overflowResolved = true;
+         } else if (metrics.lines > 1 && !metrics.truncated && i.fittedText !== metrics.fittedText) {
+             trace.push(`"${i.el.id}" wrapped to ${metrics.lines} lines.`);
+             i.fittedText = metrics.fittedText;
+             overflowResolved = true;
+         }
+      }
+      if (overflowResolved) continue;
+    }
+
+    break; 
   }
 
-  // Enforcement of tap targets and text sizes
-  // minTapTarget on the CTA is enforced first (it's priority-0 and must
-  // win the space it needs), then we re-run the degrade loop so any
-  // space it just took back gets clawed from lower-priority elements
-  // rather than silently overflowing the surface.
-  for (const i of items.filter((i) => i.visible)) {
-    if (i.el.role === "action" && surface.touchOnly && surface.minTapTarget && i.main < surface.minTapTarget) {
-      trace.push(`"${i.el.id}" floored to minTapTarget=${surface.minTapTarget}px (touch surface hard constraint).`);
+  // ---- Hard constraint enforcement ---------------------------------
+  // minTapTarget enforced for ALL action elements based on priority.
+  const actionItems = items.filter((i) => i.visible && i.el.role === "action");
+  for (const i of actionItems) {
+    if (surface.touchOnly && surface.minTapTarget && i.main < surface.minTapTarget) {
+      trace.push(`"${i.el.id}" floored to minTapTarget=${surface.minTapTarget}px.`);
       i.main = surface.minTapTarget;
       i.locked = true;
       i.degradation = i.degradation ?? "shrunk";
     }
   }
+
   guard = 0;
   while (guard < 50) {
     guard++;
     if (lockedSpaceExceedsAxis()) {
       const droppable = items
-        .filter((i) => i.visible)
-        .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))
-        .find((i) => priorityRank(i.el) > 0);
-      if (!droppable) break;
-      droppable.visible = false;
-      droppable.degradation = "dropped";
-      trace.push(`"${droppable.el.id}" dropped to accommodate the CTA's minimum tap target.`);
+        .filter((i) => i.visible && i.el.role !== "action") // Try to protect actions if possible
+        .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0];
+      
+      // If we MUST drop an action, pick the lowest priority one
+      const finalDroppable = droppable || items.filter(i => i.visible).sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0];
+
+      if (!finalDroppable) break;
+      finalDroppable.visible = false;
+      finalDroppable.degradation = "dropped";
+      trace.push(`"${finalDroppable.el.id}" dropped to accommodate hard constraints.`);
       allocate();
       continue;
     }
+    
     const belowFloor = items
       .filter((i) => i.visible && !i.locked && i.main < i.minMain - 0.01)
       .sort((a, b) => priorityRank(b.el) - priorityRank(a.el))[0];
+      
     if (belowFloor) {
-      trace.push(`"${belowFloor.el.id}" shrunk to its floor to accommodate the CTA's minimum tap target.`);
+      trace.push(`"${belowFloor.el.id}" shrunk to its floor to accommodate hard constraints.`);
       belowFloor.degradation = "shrunk";
       belowFloor.main = belowFloor.minMain;
       belowFloor.locked = true;
@@ -247,6 +291,7 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     break;
   }
 
+  // Min Text Size
   for (const i of items.filter((i) => i.visible)) {
     if (i.el.type === "text" || i.el.type === "button") {
       const floor = surface.minTextSize ?? (surface.viewingDistance === "far" ? 32 : 12);
@@ -254,6 +299,16 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
       if (base < floor) {
         trace.push(`"${i.el.id}" font size floored to minTextSize=${floor}px.`);
         i.fontSize = floor;
+        if (textProvider) {
+           const w = mode === "stack" ? CROSS_AXIS_FRACTION[i.el.role] * contentW : i.main;
+           const h = mode === "row" ? CROSS_AXIS_FRACTION[i.el.role] * contentH : i.main;
+           const fw = i.el.role === "primary" ? 700 : (i.el.type === "button" ? 600 : 500);
+           const metrics = textProvider.measureText(i.el.content || "", floor, w, h, fw, i.el.maxLines);
+           if (metrics.truncated) {
+             i.fittedText = metrics.fittedText;
+             trace.push(`"${i.el.id}" truncated after enforcing minTextSize.`);
+           }
+        }
       } else {
         i.fontSize = base;
       }
@@ -264,7 +319,7 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     trace.push("All elements fit at or above their ideal allocation — no degradation was necessary.");
   }
 
-  // Convert abstract main-axis allocations into concrete x/y/w/h coords
+  // ---- Placement -----------------------------------------------------
   const resolved: ResolvedElement[] = [];
   const visibleItems = items.filter((i) => i.visible);
 
@@ -283,23 +338,32 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
       cursorX += i.main + GAP;
     }
   } else {
-    // hybrid: hero/primary-image gets a top band sized by its own `main`
-    // (already computed on the vertical axis since mainAxisLength === contentH
-    // for hybrid — see mainAxisLength assignment above), everything else
-    // flows in a horizontal row beneath it.
+    // hybrid: multiple heroes share the top band
     const bandItems = visibleItems.filter((i) => i.el.role === "hero");
     const rowItems = visibleItems.filter((i) => i.el.role !== "hero");
 
     let cursorY = contentY;
-    for (const i of bandItems) {
-      resolved.push(place(i, contentX, cursorY, contentW, i.main));
-      cursorY += i.main + GAP;
+    
+    if (bandItems.length > 0) {
+      // Split the width among multiple heroes
+      const heroGapTotal = GAP * (bandItems.length - 1);
+      const heroWidth = Math.max(0, (contentW - heroGapTotal) / bandItems.length);
+      let heroX = contentX;
+      
+      const maxHeroMain = Math.max(...bandItems.map(i => i.main));
+      
+      for (const i of bandItems) {
+        resolved.push(place(i, heroX, cursorY, heroWidth, i.main));
+        heroX += heroWidth + GAP;
+      }
+      cursorY += maxHeroMain + GAP;
     }
+
     const rowHeight = contentH - (cursorY - contentY);
-    // Distribute rowItems horizontally, proportional to their own weight.
     const totalW = rowItems.reduce((s, i) => s + ROLE_WEIGHT[i.el.role], 0);
     const availableW = contentW - GAP * Math.max(0, rowItems.length - 1);
     let cursorX = contentX;
+    
     for (const i of rowItems) {
       const w = totalW > 0 ? (ROLE_WEIGHT[i.el.role] / totalW) * availableW : 0;
       const h = Math.min(rowHeight, Math.max(i.main, ROLE_MIN_MAIN[i.el.role]));
@@ -308,13 +372,11 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     }
   }
 
-  // Elements the spec declared but that got dropped still appear in the
-  // output (visible=false) so a renderer/debugger can show what happened.
   for (const i of items.filter((i) => !i.visible)) {
     resolved.push(place(i, 0, 0, 0, 0));
   }
 
-  return { surfaceId: surface.id, mode, width: surface.width, height: surface.height, elements: resolved, trace };
+  return { surfaceId: surface.id, mode, width: surface.width, height: surface.height, elements: resolved, trace, issues };
 }
 
 function place(i: WorkingItem, x: number, y: number, w: number, h: number): ResolvedElement {
@@ -329,7 +391,7 @@ function place(i: WorkingItem, x: number, y: number, w: number, h: number): Reso
     fontSize: i.fontSize,
     visible: i.visible,
     degradation: i.degradation,
-    content: i.el.content,
+    content: i.fittedText,
     src: i.el.src,
   };
 }

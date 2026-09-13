@@ -29,6 +29,8 @@ export interface SurfaceProfile {
   minTextSize?: number;
   /** True if the surface is touch-only (kiosk, mobile) — enforces minTapTarget on all actionable elements. */
   touchOnly?: boolean;
+  /** Minimum acceptable WCAG contrast ratio (e.g. 4.5 for AA). */
+  minContrastRatio?: number;
 }
 
 const noSafeArea: SafeArea = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -88,10 +90,16 @@ export function validateSurface(s: SurfaceProfile): void {
     throw new Error(`[surface:${s.id}] width/height must be positive.`);
   }
   const sa = s.safeArea ?? noSafeArea;
+  if (sa.top < 0 || sa.right < 0 || sa.bottom < 0 || sa.left < 0) {
+    throw new Error(`[surface:${s.id}] safeArea bounds must be non-negative.`);
+  }
   if (sa.left + sa.right >= s.width || sa.top + sa.bottom >= s.height) {
     throw new Error(`[surface:${s.id}] safeArea consumes the entire surface — nothing left to lay out.`);
   }
   if (s.minTapTarget !== undefined && s.minTapTarget <= 0) {
     throw new Error(`[surface:${s.id}] minTapTarget must be positive.`);
+  }
+  if (s.minTextSize !== undefined && s.minTextSize <= 0) {
+    throw new Error(`[surface:${s.id}] minTextSize must be positive.`);
   }
 }
