@@ -1,61 +1,9 @@
 /**
- * resolver.ts — Constraint-based layout resolution.
- *
  * Ad Spec + Surface Profile → Resolved Layout
- *
- * This is a rule-based cascade, not a lookup table. There is exactly one
- * function, `resolveLayout`, and it is never branched on surface id or
- * surface name anywhere in this file. All per-surface differences fall
- * out of three numeric inputs derived from the surface: aspect ratio,
- * safe area, and hard constraints (minTapTarget / minTextSize).
- *
- * ── Algorithm, step by step ─────────────────────────────────────────
- * 1. COMPOSE: pick a composition mode purely from aspect ratio math
- *    (ratio = width/height of the safe content box):
- *      ratio >= 2.4            -> "row"    (single horizontal row —
- *                                            fits wide/short surfaces
- *                                            like a broadcast lower third)
- *      ratio <= 0.85           -> "stack"  (single vertical stack —
- *                                            fits tall surfaces like a
- *                                            mobile portrait interstitial)
- *      otherwise               -> "hybrid" (image band + a row of
- *                                            text/CTA below it — fits
- *                                            square/near-square surfaces
- *                                            like a kiosk or landscape
- *                                            phone)
- *    This is the one place aspect ratio decides *shape*; everything
- *    after this operates on abstract "main axis / cross axis" slots and
- *    does not know or care which named surface it's running for.
- *
- * 2. ALLOCATE: each element gets an ideal main-axis size from a
- *    role-based weight table (hero/primary get the most, branding the
- *    least), scaled to fill the available main axis exactly.
- *
- * 3. DEGRADE (only if hard constraints can't all be satisfied at the
- *    ideal allocation): elements are visited in *ascending* priority
- *    number... actually in *descending* priority number (3 before 2
- *    before 1) — i.e. lowest-importance first:
- *      a. Shrink the element toward its role's minimum size.
- *      b. If it is still over budget once every shrinkable element is
- *         at its minimum, drop the lowest-priority element entirely
- *         (visible=false) and re-run allocation for the remainder.
- *    Priority-1 elements and any element with role "action" are never
- *    dropped, and are only shrunk as an absolute last resort, after
- *    every lower-priority element has already been shrunk to its floor
- *    and dropped.
- *
- * 4. ENFORCE HARD CONSTRAINTS:
- *      - `minTapTarget`: action/button elements on touch surfaces are
- *        floored to at least this size, taking space back from lower
- *        priority elements if needed (re-triggers step 3).
- *      - `minTextSize` / far viewing distance: text elements are
- *        floored to this font size; if that no longer fits, lower
- *        priority neighbors shrink/drop instead of the text.
- *
- * 5. PLACE: convert final sizes into concrete non-overlapping x/y boxes
- *    inside the safe area, using the composition mode's placement rule
- *    (stack = vertical flow; row = horizontal flow; hybrid = image band
- *    then a horizontal row for the remaining elements).
+ * 
+ * Resolves layouts by picking a composition mode based on aspect ratio,
+ * allocating space by priority weights, and degrading (shrinking/dropping)
+ * lower-priority elements when space runs out.
  */
 
 import type { AdElement, AdSpec, ElementRole } from "./spec";
@@ -85,7 +33,7 @@ export interface ResolvedLayout {
   width: number;
   height: number;
   elements: ResolvedElement[];
-  /** Human-readable trace of degradation decisions, for explainability (assignment explicitly rewards this). */
+  /** Human-readable trace of degradation decisions. */
   trace: string[];
 }
 
@@ -141,9 +89,7 @@ function pickMode(contentW: number, contentH: number): CompositionMode {
 }
 
 function priorityRank(el: AdElement): number {
-  // Elements with role "action" are treated as priority 1 regardless of
-  // their declared priority, per the assignment's hard requirement that
-  // the CTA is compromised last.
+  // Action elements are highest priority (0), ensuring they are compromised last.
   if (el.role === "action") return 0;
   return el.priority;
 }
@@ -195,7 +141,7 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     }
   }
 
-  // ---- Degradation loop -------------------------------------------
+  // `allocate()` distributes space proportionally by weight.
   // `allocate()` always distributes the full main axis proportionally by
   // weight, so it never "overflows" by construction — the real signal
   // that something must give is an *unlocked* item's weighted share
@@ -259,7 +205,7 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     break; // everything fits at or above its floor
   }
 
-  // ---- Hard constraint enforcement ---------------------------------
+  // Enforcement of tap targets and text sizes
   // minTapTarget on the CTA is enforced first (it's priority-0 and must
   // win the space it needs), then we re-run the degrade loop so any
   // space it just took back gets clawed from lower-priority elements
@@ -318,7 +264,7 @@ export function resolveLayout(spec: AdSpec, surface: SurfaceProfile): ResolvedLa
     trace.push("All elements fit at or above their ideal allocation — no degradation was necessary.");
   }
 
-  // ---- Placement -----------------------------------------------------
+  // Convert abstract main-axis allocations into concrete x/y/w/h coords
   const resolved: ResolvedElement[] = [];
   const visibleItems = items.filter((i) => i.visible);
 

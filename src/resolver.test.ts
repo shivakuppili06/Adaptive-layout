@@ -1,12 +1,5 @@
 /**
- * resolver.test.ts — Correctness gap-checks.
- *
- * Run with: npm test
- *
- * These are exactly the checks the assignment's evaluation criteria call
- * out explicitly: no overlaps, no clipping outside surface bounds, hard
- * constraints (minTapTarget / minTextSize) always honored, and priority
- * order respected under degradation.
+ * Correctness gap-checks: no overlaps, no clipping, hard constraints, and priority degradation.
  */
 import { describe, expect, it } from "vitest";
 import { resolveLayout } from "./resolver";

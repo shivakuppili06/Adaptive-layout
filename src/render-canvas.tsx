@@ -1,9 +1,6 @@
 /**
- * render-canvas.tsx — Renders a ResolvedLayout to a <canvas> element.
- *
- * Bonus deliverable: proves the resolver output is renderer-agnostic.
- * Reads exactly the same ResolvedLayout shape as render-dom.tsx and
- * makes zero layout decisions of its own.
+ * Renders a ResolvedLayout to a <canvas> element.
+ * Proves the resolver output is renderer-agnostic.
  */
 import { useEffect, useRef } from "react";
 import type { ResolvedLayout } from "./resolver";
@@ -16,7 +13,7 @@ const ROLE_COLOR: Record<string, string> = {
   branding: "#8a8f9c",
 };
 
-export function CanvasRenderer({ layout }: { layout: ResolvedLayout }) {
+export function CanvasRenderer({ layout, debug }: { layout: ResolvedLayout; debug?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -69,6 +66,14 @@ export function CanvasRenderer({ layout }: { layout: ResolvedLayout }) {
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
           wrapText(ctx, el.content ?? "", el.x, el.y, el.width, el.height, el.fontSize ?? 14);
+        }
+
+        if (debug && el.role === "action") {
+          ctx.strokeStyle = "#ef4444";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(el.x, el.y, el.width, el.height);
+          ctx.setLineDash([]);
         }
       }
     };

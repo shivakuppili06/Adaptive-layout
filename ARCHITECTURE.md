@@ -40,13 +40,10 @@ shape: iterate `layout.elements`, read `x/y/width/height/fontSize/type/content/s
 
 ## Why a hand-rolled priority/weight model instead of a general solver
 
-The brief explicitly discourages an over-engineered LP/constraint solver in favor of a
-"well-reasoned priority-ordered algorithm." The model here is deliberately close to a flexbox
-mental model — main axis, weights, floors — because:
+The model here is deliberately close to a flexbox mental model — main axis, weights, floors — because:
 
 1. **Explainability.** Every degradation decision produces one plain-English trace line
-   (`"logo" shrunk to its floor (18px)`), which is what the live interview explicitly asks
-   candidates to walk through. An LP solver's dual values are not a good answer to "why did the logo
+   (`"logo" shrunk to its floor (18px)`). An LP solver's dual values are not a good answer to "why did the logo
    end up here."
 2. **Determinism.** The same spec + surface always produces the same layout; there's no solver
    convergence or tie-breaking ambiguity to explain.
@@ -61,10 +58,7 @@ returns one of three abstract modes (`row | stack | hybrid`) — never a surface
 downstream (allocation, degradation, placement) operates on "main axis" and "cross axis" in the
 abstract; a `row` mode surface with `width=2000` behaves identically, structurally, to a `row` mode
 surface with `width=500`, because the algorithm only ever sees ratios and proportions, not absolute
-surface identity. This is what the brief's "no `if (surface === 'mobile')`" requirement is actually
-testing for, and it's verified by `resolver.test.ts`'s
-`"produces meaningfully different compositions for portrait vs. wide vs. square"` test, which
-asserts the three required demo surfaces resolve to three distinct `mode` values.
+surface identity. This avoids per-surface conditionals and ensures the algorithm generalizes.
 
 ## Degradation algorithm (implementation detail)
 

@@ -42,11 +42,8 @@ export interface AdSpec {
 }
 
 /**
- * Compile-time guard: catches duplicate element ids and an empty element
- * list at the type level is not practical in TS without heavier tricks,
- * so we enforce structural correctness here at construction time and
- * throw a clearly-reported runtime error (per assignment spec) for the
- * cases TS can't catch (duplicate ids, missing `src` on images).
+ * Enforces structural correctness at construction time for cases 
+ * TS can't easily catch (duplicate ids, missing `src` on images).
  */
 export function defineAd(input: { id?: string; elements: readonly AdElement[] }): AdSpec {
   const id = input.id ?? "ad";

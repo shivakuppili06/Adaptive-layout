@@ -8,7 +8,7 @@ export const demoAd = defineAd({
       type: "image",
       role: "hero",
       priority: 1,
-      src: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&q=60",
+      src: "https://images.unsplash.com/photo-1572569433114-118d09618fce?w=600&q=60", // Sleek tech watch
       aspectRatio: 1,
     },
     {
@@ -16,29 +16,29 @@ export const demoAd = defineAd({
       type: "text",
       role: "primary",
       priority: 1,
-      content: "Trailblazer GTX — built for the storm.",
+      content: "Lumina Series 5 — Focus on what matters.",
     },
     {
       id: "cta",
       type: "button",
       role: "action",
       priority: 1,
-      content: "Shop Now",
+      content: "Pre-order",
     },
     {
       id: "price",
       type: "text",
       role: "secondary",
       priority: 2,
-      content: "₹6,499",
+      content: "Starting at $199",
     },
     {
       id: "logo",
       type: "image",
       role: "branding",
       priority: 3,
-      src: "https://dummyimage.com/80x80/8a8f9c/ffffff.png&text=LOGO",
-      aspectRatio: 1,
+      src: "https://dummyimage.com/120x60/16181d/ffffff.png&text=LUMINA",
+      aspectRatio: 2,
     },
   ],
 });
